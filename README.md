@@ -7,12 +7,19 @@ Gene-set enrichment analysis was undertaken on previously published data from Ja
 ## https://bioinformatics-core-shared-training.github.io/cruk-summer-school-2018/RNASeq2018/html/06_Gene_set_testing.nb.html
 
 library(fgsea)
+
 library(dplyr)
+
 library(goseq)
+
 library(ggplot2)
+
 library(DESeq2)
+
 library(AnnotationDbi)
+
 library(org.Hs.eg.db)
+
 library(clusterProfiler)
 
 load("./DESeq_object_MISC_signature.RData")
