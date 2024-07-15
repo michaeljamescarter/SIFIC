@@ -1,0 +1,250 @@
+#######################################################
+# MOFA
+#######################################################
+library(MOFA2)
+library(tidyverse)
+
+## Preparing datasets: splitting dataset used in the PCA into separate expression and cell proportion data. Note that this dataset uses the fold change in markers in diseased children compared with healthy controls, hence n = 66.
+
+rownames(meta_pca)
+
+# create MOFA obj
+mofa_obj <- create_mofa_from_matrix(data = list(expression_markers = as.matrix(t(log2(main.pc.exp.sub_fc+1))),
+                                                proportions = as.matrix(t(log2(main.pc.pop.sub_fc+1))) ))
+
+# # add feature metadata
+mofa_obj@features_metadata <- rbind(data.frame(view = "expression_markers",
+                                                feature = colnames(main.pc.exp.sub_fc)),
+                                     data.frame(view = "proportions", feature = colnames(main.pc.pop.sub_fc)))
+
+data_opts <- get_default_data_options(mofa_obj)
+data_opts$scale_views <- FALSE
+
+# keep default model options
+model_opts <- get_default_model_options(mofa_obj)
+model_opts$num_factors <- 5
+
+# use default training options
+train_opts <- get_default_training_options(mofa_obj)
+head(train_opts)
+
+# train object
+MOFAobject <- prepare_mofa(
+  object = mofa_obj,
+  data_options = data_opts,
+  model_options = model_opts,
+  training_options = train_opts
+)
+
+outfile = file.path(getwd(),"/Users/michaelcarter/Dropbox/Academic Clinical Lectureship/Academic training/Mass cytometry SIFIC Evelina/exp_prop_integration/mofa_model.hdf5")
+MOFAobject.trained <- run_mofa(MOFAobject, outfile, use_basilisk = TRUE)
+
+# analyse the mofa output
+head(MOFAobject.trained@cache$variance_explained$r2_per_factor) # group 1
+
+plot_variance_explained(MOFAobject.trained,
+                        x="group", y="view")
+pdf(file = 'variance_explained_per_view.pdf', height = 6, width = 5)
+plot_variance_explained(MOFAobject.trained,
+                        x="view", y="factor", split_by = F)
+dev.off()
+
+pdf(file = 'total_variance_explained_per_view.pdf', height = 6, width = 5)
+plot_variance_explained(MOFAobject.trained,
+                        x="view", y="factor", plot_total = T, split_by = F)
+dev.off()
+
+# add metadata
+MOFAobject.trained@samples_metadata$group <- meta_pca$group[match(MOFAobject.trained@samples_metadata$sample, rownames(meta_pca))]
+
+MOFAobject.trained@samples_metadata$TP <- meta_pca$Timepoint[match(MOFAobject.trained@samples_metadata$sample,rownames(meta_pca))]
+
+MOFAobject.trained@samples_metadata$ivig.t1 <- meta_pca$ivig.t1[match(MOFAobject.trained@samples_metadata$sample, rownames(meta_pca))]
+
+MOFAobject.trained@samples_metadata$ivig.t2 <- meta_pca$ivig.t2[match(MOFAobject.trained@samples_metadata$sample, rownames(meta_pca))]
+
+MOFAobject.trained@samples_metadata$ivig.t3 <- meta_pca$ivig.t3[match(MOFAobject.trained@samples_metadata$sample, rownames(meta_pca))]
+
+MOFAobject.trained@samples_metadata$steroids.t1 <- meta_pca$steroid.t1[match(MOFAobject.trained@samples_metadata$sample, rownames(meta_pca))]
+
+MOFAobject.trained@samples_metadata$steroids.t2 <- meta_pca$steroid.t2[match(MOFAobject.trained@samples_metadata$sample,rownames(meta_pca))]
+
+MOFAobject.trained@samples_metadata$steroids.t3 <- meta_pca$steroid.t3[match(MOFAobject.trained@samples_metadata$sample,  rownames(meta_pca))]
+
+MOFAobject.trained@samples_metadata$monoclonal.t1 <- meta_pca$monoclonal.t1[match(MOFAobject.trained@samples_metadata$sample,rownames(meta_pca))]
+
+MOFAobject.trained@samples_metadata$monoclonal.t2 <- meta_pca$monoclonal.t2[match(MOFAobject.trained@samples_metadata$sample,rownames(meta_pca))]
+
+MOFAobject.trained@samples_metadata$monoclonal.t3 <- meta_pca$monoclonal.t3[match(MOFAobject.trained@samples_metadata$sample, rownames(meta_pca))]
+
+MOFAobject.trained@samples_metadata$group[MOFAobject.trained@samples_metadata$group=="Severe bacterial infection"] <- 'SBI'
+
+MOFAobject.trained@samples_metadata$group[MOFAobject.trained@samples_metadata$group=="Severe viral infection"] <- 'SVI'
+
+MOFAobject.trained@samples_metadata$group <- fct_relevel(as.factor(MOFAobject.trained@samples_metadata$group), "MIS-C", "SBI", "SVI", "KD")
+
+MOFAobject.trained@samples_metadata[is.na(MOFAobject.trained@samples_metadata)]<-0
+
+MOFAobject.trained@samples_metadata$cluster <- NA
+MOFAobject.trained@samples_metadata$cluster[MOFAobject.trained@samples_metadata$sample %in% sub_grp_1] <- 1
+MOFAobject.trained@samples_metadata$cluster[MOFAobject.trained@samples_metadata$sample %in% sub_grp_2] <- 2
+
+#### calculate correlation between each of the factors and various metadata variables
+factors <- get_factors(MOFAobject.trained)
+factors <- do.call('rbind', factors)
+
+# # add metadata
+factors <- cbind(factors, meta_pca[match(rownames(factors), rownames(meta_pca)), c(3,24,30,32,34,38:40,43:45,49:50)])
+
+factors$Timepoint <- as.numeric(as.factor(factors$Timepoint))
+
+factors <- cbind(factors, model.matrix(~ 0 + factors$group))
+
+colnames(factors)[19:ncol(factors)] <- c("KD", "MIS-C", "SBI", "SVI")
+
+factors <- factors[, c(1:22)]
+factors[is.na(factors)] <- 0
+
+
+library(corrplot)
+
+#cor_mat <- cor(factors[,c(1:5,6:10,19:ncol(factors))])
+#cor_mat <- cor_mat[6:nrow(cor_mat),1:5]
+
+# rownames(cor_mat) <- str_replace_all(rownames(cor_mat),
+#                                      "\\.t", " T")
+#
+# # pdf(file = 'exp_prop_integration/mofa/correlation_plot_factors.pdf',
+# #     height = 4, width = 8)
+# corrplot(t(cor_mat), col = COL2('PiYG'), number.cex = 0.5,
+#          addCoef.col = 'black', tl.col = 'black')
+#dev.off()
+
+# add variables including tp and group
+# MISC
+factors$MISC_TP1 <- 0
+factors$MISC_TP1[factors$group=="MIS-C" & factors$Timepoint == "1"] <- 1
+factors$MISC_TP2 <- 0
+factors$MISC_TP2[factors$group=="MIS-C" & factors$Timepoint == "2"] <- 1
+factors$MISC_TP3 <- 0
+factors$MISC_TP3[factors$group=="MIS-C" & factors$Timepoint == "3"] <- 1
+
+# SBI
+factors$SBI_TP1 <- 0
+factors$SBI_TP1[factors$group=="Severe bacterial infection" & factors$Timepoint == "1"] <- 1
+factors$SBI_TP2 <- 0
+factors$SBI_TP2[factors$group=="Severe bacterial infection" & factors$Timepoint == "2"] <- 1
+factors$SBI_TP3 <- 0
+factors$SBI_TP3[factors$group=="Severe bacterial infection" & factors$Timepoint == "3"] <- 1
+
+# SVI
+factors$SVI_TP1 <- 0
+factors$SVI_TP1[factors$group=="Severe viral infection" & factors$Timepoint == "1"] <- 1
+factors$SVI_TP2 <- 0
+factors$SVI_TP2[factors$group=="Severe viral infection" & factors$Timepoint == "2"] <- 1
+
+# KD
+factors$KD_TP1 <- 0
+factors$KD_TP1[factors$group=="KD" & factors$Timepoint == "1"] <- 1
+factors$KD_TP2 <- 0
+factors$KD_TP2[factors$group=="KD" & factors$Timepoint == "2"] <- 1
+factors$KD_TP3 <- 0
+factors$KD_TP3[factors$group=="KD" & factors$Timepoint == "3"] <- 1
+
+cor_mat_disease <- cor(factors[,c(1:5, 23:ncol(factors))])
+cor_mat_disease <- cor_mat_disease[6:nrow(cor_mat_disease),1:4]
+
+rownames(cor_mat_disease) <- str_replace_all(rownames(cor_mat_disease),
+                                             "\\.t", " T")
+colnames(cor_mat_disease) <- str_replace_all(colnames(cor_mat_disease), "Factor", "Factor ")
+
+png(file = 'correlation_plot_factors_disease.png',
+    height = 4, width = 8, units = 'in', res = 700)
+corrplot(t(cor_mat_disease), col = COL2('PiYG'), number.cex = 0.7,
+         addCoef.col = 'black', tl.col = 'black')
+dev.off()
+
+library(GGally)
+# not using these figures
+
+# across all TP1s
+factors$group[factors$group=="Severe bacterial infection"] <- "SBI"
+factors$group[factors$group=="Severe viral infection"] <- "SVI"
+
+png(file = 'scatter_all_tp1.png', height = 6.5, width= 8, res = 700, units = 'in')
+ggpairs(factors[factors$Timepoint %in% c(0, 1),],
+        columns = 1:4,
+        ggplot2::aes(colour=fct_relevel(group, "KD", "SVI",'SBI', 'MIS-C')),
+        upper = list(continuous  = 'points'),
+        legend = c(3,3))+
+  theme_bw()+
+  scale_color_manual(values = c("#009E73", "#56B4E9",  '#D55E00', "#CC79A7"))+
+  scale_fill_manual(values = c("#009E73", "#56B4E9",  '#D55E00', "#CC79A7"))+
+  theme(legend.position = 'right')+labs(color = 'Group', fill = "Group")
+dev.off()
+
+
+# MIS-C across timepoints
+png(file = 'scatter_misc_vs_tp.png', height = 6.5, width= 8, res = 700, units = 'in')
+ggpairs(factors[factors$group=="MIS-C",],
+        columns = 1:4,
+        ggplot2::aes(colour=fct_relevel(as.factor(Timepoint), '3', '2')),
+        upper = list(continuous  = 'points'),
+        legend = c(3,3))+
+  theme_bw()+
+  scale_color_manual(values = c('#fcc5c0', '#f768a1', "#7a0177"))+
+  scale_fill_manual(values = c('#fcc5c0', '#f768a1', "#7a0177"))+
+  theme(legend.position = 'right')+labs(color = 'Timepoint', fill = "Timepoint")
+dev.off()
+
+# SBI across timepoints
+png(file = 'scatter_sbi_vs_tp.png', height = 6.5, width= 8,  res = 700, units = 'in')
+ggpairs(factors[factors$group == "SBI",],
+        columns = 1:4,
+        ggplot2::aes(colour=fct_relevel(as.factor(Timepoint),
+                                        '3','2','1')),
+        upper = list(continuous  = 'points'),
+        legend = c(3,3))+
+  theme_bw()+
+  theme(legend.position = 'right')+labs(color = 'Timepoint', fill = "Timepoint")+
+  scale_color_manual(values = c('#fed976', '#fd8d3c', "#f03b20"))+
+  scale_fill_manual(values = c('#fed976', '#fd8d3c', "#f03b20"))
+dev.off()
+
+##### test colour scheme
+group_tp1_test <- ggplot(factors[factors$Timepoint %in% c(0,1),],
+                          aes(x = fct_relevel(group, "MIS-C", "SBI", "SVI", "KD"),
+                              y = Factor1,
+                              fill = fct_relevel(group, "MIS-C", "SBI", "SVI", "KD")))+
+   geom_boxplot(outlier.shape = NA) +
+   theme_bw()+
+   scale_fill_manual(values = c("#CC79A7", "#D55E00", "#56B4E9", '#009E73'))+
+   labs(fill = "group", x = "Group")
+
+group_misc_test <- ggplot(factors[factors$group =="MIS-C",],
+                           aes(x = fct_relevel(as.factor(Timepoint),
+                                               '1','2','3'),
+                               y = Factor1,
+                               fill = fct_relevel(as.factor(Timepoint),
+                                                  '1','2', '3')))+
+   geom_boxplot(outlier.shape = NA)+
+   theme_bw()+
+   scale_fill_manual(values = c('#7a0177', '#f768a1', "#fcc5c0"))+
+   labs(fill = "MIS-C Timepoint", x = "MIS-C Timepoint")
+
+
+group_sbi_test <- ggplot(factors[factors$group =="SBI",],
+                           aes(x = fct_relevel(as.factor(Timepoint),
+                                               '1','2','3'),
+                               y = Factor1,
+                               fill = fct_relevel(as.factor(Timepoint),
+                                                  '1','2', '3')))+
+   geom_boxplot(outlier.shape = NA)+
+   theme_bw()+
+   scale_fill_manual(values = c('#f03b20', '#fd8d3c', "#fed976"))+
+   labs(fill = "SBI Timepoint", x = "SBI Timepoint")
+
+png(file = 'exp_prop_integration/mofa/colour_scheme_test.png', res = 700, units = 'in', height = 3, width = 12)
+grid.arrange(group_tp1_test, group_misc_test, group_sbi_test, ncol = 3)
+dev.off()
+
